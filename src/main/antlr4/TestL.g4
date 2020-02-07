@@ -7,8 +7,8 @@ commands : command
          | command NEWLINE commands
          ;
 
-command: LINE FROM point TO point
-       | POINT AT point
+command: LINE FROM fro=point TO to=point # cline
+       | POINT AT at=point # cpoint
        ;
 
 point: INT COMMA INT;
