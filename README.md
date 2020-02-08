@@ -19,8 +19,8 @@ Pour pouvoir utiliser ANTLR, le `pom.xml` doit au moins ressembler à ça:
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <antlr4.visitor>true</antlr4.visitor> <!--- si visitors -->
-        <antlr4.listener>true</antlr4.listener> <!-- si listener -->
+        <antlr4.visitor>true</antlr4.visitor> <!--- si besoint d'un visitor -->
+        <antlr4.listener>true</antlr4.listener> <!-- si besoin d'un listener -->
     </properties>
 
     <dependencies>
@@ -107,8 +107,7 @@ En résumé, on a deux manières de travailler:
   SINGLE : '\'' .*? '\'' -> type(STRING) ;
   WS     : [ \r\t\n]+    -> skip ;
   ```
- 
- On peut également définir des modes (??).
+  On peut également définir des modes (??).
   
 + De même, on peut *labeliser* les *tokens* d'une règle ([voir ici](https://github.com/antlr/antlr4/blob/master/doc/parser-rules.md#rule-element-labels)). Par exemple, 
   
@@ -127,8 +126,10 @@ En résumé, on a deux manières de travailler:
   ```
   
   où `[...]` sont des définitions de variables, écrites dans le langage cible du compilateur (Java, donc).
+  
   `{action}` est un bloc de code (toujours écrit dans le langage cible) qui est ajouté au compilateur et exécuté durant le *parsing*.
   D'après [ici](https://github.com/antlr/antlr4/blob/master/doc/actions.md), dans la partie `{action}`, `$x` remplace le *token* `x=SOMETHING` correspondant (d'où l'intérêt de les labéliser).
+  Le défaut de cette approche est qu'on écrit du code spécifique directement dans la grammaire: avec ANTLR4, il est suggéré d'utiliser un visiteur où un *listener* pour faire ça ! 
   
   Pour définir un attribut local (donc attribuer la grammaire), c'est le bloc `[locals]` qui doit être utilisé.
   
@@ -143,8 +144,143 @@ En résumé, on a deux manières de travailler:
   
 ## Utiliser ce qui est généré
 
-Les classes correspondantes sont générées via la commande `package` de Maven, et elle le sont dans un dossier `/target`, par défaut.
+Les classes correspondantes sont générées via la commande `package` de Maven, et elles le sont dans un dossier `/target`, par défaut.
 En particulier, on a le code source des classes générées dans `/target/generated-sources/antlr4` (toujours utile pour la suite).
-  
-  
-[*To be continued*](https://www.youtube.com/watch?v=I2PmwSgkHUI).
+
+Pour un langage `XX` (déclaré via `grammar XX;` dans le fichier `XX.g4`), les classes suivantes sont générées:
+
++ `XXLexer`, la classe représentant le *lexer*,
++ `XXParser`, la classe représentant le *parser*,
++ `XXVisitor` et `XXListener` (générés si on le demande gentiment, voir `pom.xml` ci-dessus), qui sont les **interface** du visiteur/*listener*.
++ `XXBaseVisitor` et `XXBaseListener`, des implémentations des interfaces en questions qui ne font absolument rien (mais dont on peut hériter et faire de l'*override*).
+
+**Note**: La documentation des classes *runtime* est disponible [ici](https://www.antlr.org/api/Java/index.html). C'est parfois utile.
+
+Par exemple, prenons la grammaire [`TestL`](src/main/antlr4/TestL.g4). 
+De manière assez logique, le *lexer* est nommé `TestLLexer` et le parser est nommé `TestLParser`
+Le code minimal pour l'utiliser est
+
+```java
+/* + eventual `package` */
+
+import org.antlr.v4.runtime.CharStreams;
+import org.antlr.v4.runtime.CommonTokenStream;
+import org.antlr.v4.runtime.tree.ParseTree;
+
+public class Main {
+
+	public static void main(String[] args) {
+		String tmp = "point at 4,4";
+		Main main = new Main();
+		main.parse(tmp);
+	}
+
+	Main() { /* nothing */ }
+
+	private void parse(String c) {
+		// 1. create token stream from lexer
+		CommonTokenStream ts = new CommonTokenStream(new TestLLexer(CharStreams.fromString(c)));
+
+		// 2. create the parser
+		TestLParser parser = new TestLParser(ts);
+
+		// 3. parse, by requesting the root node of the grammar
+		ParseTree tree = parser.file();
+        
+		// bonus print a "LISP-style" parser tree
+		System.out.println(tree.toStringTree(parser));
+	}
+}
+```
+
+Le tout, c'est de bien appeller la règle de départ (ici, `file()`).
+On notera qu'une fonction (dont les paramètres d'entrée sont définis par `[args]` ci dessus) est générée par règle de la grammaire (d'où `file()`, mais si on regarde les sources, on a également `point()` et `command()`).
+
+## *Visitor*, *Listener*, et l'art de se promener
+
+Un visiteur (*visitor*) et un *listener* permetent tout deux de visiter chaque noeud de l'arbre une fois généré, donc après la phase de *parsing*.
+Il agissent donc sur un un `ParseTree`. Et, pour résumer, il s'agit du moyen le plus efficace pour faire une grammaire attribuée.
+
+
+### *Visitor* (visiteur)
+
+Cette manière de procéder est basée sur le [*visitor pattern*](https://fr.wikipedia.org/wiki/Visiteur_(patron_de_conception)).
+
+Le plus simple: un visiteur doit hériter de la classe `XXXBaseVisitor` (elle même dérivée de [`AbstractParseTreeVisitor`](https://www.antlr.org/api/Java/org/antlr/v4/runtime/tree/AbstractParseTreeVisitor.html)). 
+À noter qu'il s'agit d'une *template*, dont l'argument est `T`, qui est le type de retour des méthodes de celle-ci.
+
+Dans celle-ci, on a des méthodes `visitYY()` (qui renvoit un argument de type `T`, donc) où `YY` est une règle de la grammaire ou un *label* dans celle-ci (on doit labeliser toutes les alternatives d'une règle le cas échéant).
+Par exemple, soit la grammaire suivante,
+
+```antlrv4
+grammar XX;
+
+ruleX : ruleY T
+      | U ruleY
+      ;
+
+ruleY : A B  # ruleYA
+      | B C  # ruleYB
+      ;
+```
+
+on aura une fonction `visitRuleX()`, qui visitera génériquement les noeuds de type `ruleX`, mais également des fonctions `visitRuleYA()` et `visitRuleYB()`, explorant spécificement les noeuds labelisé. Par contre, pas de fonction `visitRuleY()` (puisqu'on a déjà les fonctions pour visiter les noeuds labelisés).
+
+Chacune de ces fonctions `visitYY()` prend pour paramètre un contexte, `ctx`, qui hérite de [`ParserRuleContext`](https://www.antlr.org/api/Java/org/antlr/v4/runtime/ParserRuleContext.html) qui reprend, en gros, le noeud parent et les noeuds enfants de cette règle.
+Si on labélise les *tokens* d'une règle, ces labels sont également disponibles sous forme d'attributs publics de ce contexte. On y retrouve également les attributs définis dans le bloc `locals [locals]` d'une règle.
+Par exemple, pour la grammaire suivante,
+
+```antlrv4
+grammar X;
+rule: X in=dest out=dest;
+dest locals [int usage=0]: A | B;
+```
+
+on aura la fonction `visitRule(XParser.RuleContext ctx)`, avec `ctx.in` et `ctx.out` qui sont défini dans la classe `XParser.RuleContext` (qui hérite bien de `ParserRuleContext`). 
+On aura également `ctx.dest()`, qui renvoit la liste des deux `XParser.DestContext`.
+Quand au contexte `XParser.DestContext`, on y retrouvera `ctx.usage`, initialisé à 0.
+
+Lorsqu'on implémente ces fonctions `visitYY()`, il faut ABSOLUMENT visiter les enfants.
+Pour ce faire, 
+
++ Soit on appelle la fonction `visit()` générique sur chacun de ceux-ci (on peut également utiliser les fonctions spécifiques `visitYY()` sur ceux-ci, ça revient au même).
++ On peut visiter tout les enfants en utilisant la fonction `visitChildren()`, prenant en paramètre le contexte.
+
+L'intérêt d'un *visitor* est qu'on peut choisir (grâce à la première manière de faire) de ne PAS visiter certains enfants. 
+
+On peut voir un exemple (idiot) de visiteur dans [`CountPointsVisitor`](src/main/java/CountPointsVisitor.java).
+Et pour l'utiliser, deux manières de faire:
+```java
+CountPointsVisitor cv = new CountPointsVisitor();
+
+// option 1
+Integer n = cv.visit(tree);
+
+// option 2
+Integer n = tree.accept(cv);
+```
+
+Vu qu'on a le contrôle sur la visite, il est légèrement plus simple d'utiliser un *visitor* pour implémenter la partie "traduction dans le langage cible".
+
+### *Listener* ("écouteur")
+
+Pour un début d'explications: [voir ici](https://github.com/antlr/antlr4/blob/master/doc/listeners.md).
+
+Un *listener* fonctionne sur le même principe, mais cette fois, tout les noeuds sont visités, car il ne faut pas explicitement demander à ce qu'ils le soient.
+En effet avec cette manière de travailler, un *walker* visite l'arbre: on est juste informé de quand ce *walker* "entre" dans un noeud de type YY (car il appelle alors `enterYY()`) et quand il en sort (car il appelle alors `exitYY()`).
+Bien entendu, ces méthodes prennent en paramètre le contexte, `ctx`, qui est le même que pour les visiteurs.
+
+Le principe est donc le même, mais force explictement à utiliser des attributs de classe (vu que les méthodes ne peuvent pas renvoyer de paramètres).
+
+Pour le fun, on réimplémente exactement la même chose avec un *listener* dans [`CountPointsListener`](src/main/java/CountPointsVisitor.java).
+Et pour l'utiliser, on défini d'abors un *walker*, qu'on utilise avec le *listener* sur l'arbre:
+```java
+ParseTreeWalker walker = new ParseTreeWalker();
+CountPointsListener li = new CountPointsListener();
+walker.walk(li, tree);
+System.out.println(li.n);
+```
+
+Le résultat est absolument le même qu'avec le *visitor*, mais c'est légèrement plus court à implémenter, ce qui en fait un bon choix pour tout ce qui est analyse sémantique.
+
+[*To be continued*](https://www.youtube.com/watch?v=I2PmwSgkHUI) ?
