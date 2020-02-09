@@ -68,7 +68,7 @@ où `{qualified-name}` est le nom du projet (ici `be.unamur.b314.compiler`).
 
 ## Grammaire et *tokens*
 
-[Voir ICI](https://github.com/antlr/antlr4/blob/master/doc/index.md)
+[Voir ICI](https://github.com/antlr/antlr4/blob/master/doc/index.md) pour un début d'explication (la doc de projet la plus mauvaise de l'univers, parce qu'il manque des bouts) et [là](http://lms.ui.ac.ir/public/group/90/59/01/15738_ce57.pdf) pour le fameux bouquin (qui est pas une documentation spécialement plus efficace, de mon avis).
 
 En résumé, on a deux manières de travailler:
 
@@ -129,7 +129,7 @@ En résumé, on a deux manières de travailler:
   
   `{action}` est un bloc de code (toujours écrit dans le langage cible) qui est ajouté au compilateur et exécuté durant le *parsing*.
   D'après [ici](https://github.com/antlr/antlr4/blob/master/doc/actions.md), dans la partie `{action}`, `$x` remplace le *token* `x=SOMETHING` correspondant (d'où l'intérêt de les labéliser).
-  Le défaut de cette approche est qu'on écrit du code spécifique directement dans la grammaire: avec ANTLR4, il est suggéré d'utiliser un visiteur où un *listener* pour faire ça ! 
+  Le défaut de cette approche est qu'on écrit du code spécifique directement dans la grammaire: avec ANTLR4, il est **fortement** suggéré d'utiliser un visiteur où un *listener* pour faire ça ! 
   
   Pour définir un attribut local (donc attribuer la grammaire), c'est le bloc `[locals]` qui doit être utilisé.
   
@@ -141,6 +141,9 @@ En résumé, on a deux manières de travailler:
   lexer grammar X;
   END : ('endif'|'end') {System.out.println("found an end");} ;
   ```
+  
+Ce qui est réellement intéréssant dans tout ça, c'est qu'on peut labeliser les règles et les *tokens* de celle-ci, parce que ça aide à s'y retrouver pour la suite.
+Le reste, c'est du détail.
   
 ## Utiliser ce qui est généré
 
@@ -187,7 +190,7 @@ public class Main {
 		// 3. parse, by requesting the root node of the grammar
 		ParseTree tree = parser.file();
         
-		// bonus print a "LISP-style" parser tree
+		// bonus: print a "LISP-style" parser tree
 		System.out.println(tree.toStringTree(parser));
 	}
 }
@@ -270,7 +273,8 @@ Un *listener* fonctionne sur le même principe, mais cette fois, tout les noeuds
 En effet avec cette manière de travailler, un *walker* visite l'arbre: on est juste informé de quand ce *walker* "entre" dans un noeud de type YY (car il appelle alors `enterYY()`) et quand il en sort (car il appelle alors `exitYY()`).
 Bien entendu, ces méthodes prennent en paramètre le contexte, `ctx`, qui est le même que pour les visiteurs.
 
-Le principe est donc le même, mais force explictement à utiliser des attributs de classe (vu que les méthodes ne peuvent pas renvoyer de paramètres).
+Le principe est donc le même, mais force explictement à utiliser des attributs de classe (vu que les méthodes ne peuvent pas renvoyer quelque chose).
+C'est intéréssant aussi :)
 
 Pour le fun, on réimplémente exactement la même chose avec un *listener* dans [`CountPointsListener`](src/main/java/CountPointsVisitor.java).
 Et pour l'utiliser, on défini d'abors un *walker*, qu'on utilise avec le *listener* sur l'arbre:
@@ -278,9 +282,34 @@ Et pour l'utiliser, on défini d'abors un *walker*, qu'on utilise avec le *liste
 ParseTreeWalker walker = new ParseTreeWalker();
 CountPointsListener li = new CountPointsListener();
 walker.walk(li, tree);
-System.out.println(li.n);
+System.out.println(li.n); // on est donc obligé d'utiliser un attribut pour avoir le résultat.
 ```
 
 Le résultat est absolument le même qu'avec le *visitor*, mais c'est légèrement plus court à implémenter, ce qui en fait un bon choix pour tout ce qui est analyse sémantique.
+
+## Se plaindre !
+
+Au niveau du *parser*, les fonctions lancent une [`RecognitionException`](https://www.antlr.org/api/Java/org/antlr/v4/runtime/RecognitionException.html) (qui hérite forcément de `RuntimeExpression`). 
+On peut y retrouver, entre autres, le *token* attendu et le contexte.
+
+Avec un *visitor* ou un *listener*, ce n'est pas possible (il n'y a pas de `throw` dans le code généré). Deux "solutions" à ça:
+
+1. Lancer des `RuntimeException`, parce qu'on peut toujours faire ça. C'est assez efficace pour stopper un *walker* associé à un *listener* en pleine marche.
+2. Construire une classe spécialement dédiée à la récupération des erreurs, et utiliser cet objet pour laisser les erreurs s'accumuler lors du passage du *lsitener*/*visitor* sur l'arbre. 
+   C'est utile pour avoir **toutes** les erreurs, puisqu'une exception permettrait de récupérer juste la première.
+   Notez que c'est également la stratégie utilisée par le *lexer*/*parser*.
+   
+## Bonus: construire un AST ?
+
+Évidement, ANTLR, sur base de la grammaire, construit un CST (*concrete syntax tree*).
+Il peut être intéréssant de se débarasser d'une partie, inutile, de l'information et de construire un AST (*abstract syntax tree*), puis seulement de faire la validation sémantique dessus.
+
+Le problème, c'est qu'on ne peut pas (plus, en fait) faire des transformations sur le CST généré par ANTLR, il faut donc écrire un visiteur qui génère un arbre *custom*, pour lequel il faudra également écrire un visiteur (et/ou un *listener*) *custom*. Ça perd donc un peu son intérêt.
+En plus, on ne peut pas simplement demander à ANTLR de générer les classes pour une "sous-grammaire": on ne peut pas créer simplement de `RuleContext`, car les constructeurs contiennent des informations qu'on ne peut pas avoir si on génère un arbre *from scratch*.
+
+Donc, **c'est pas forcément intéréssant**.
+
+
+-------
 
 [*To be continued*](https://www.youtube.com/watch?v=I2PmwSgkHUI) ?
